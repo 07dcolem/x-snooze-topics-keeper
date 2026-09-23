@@ -27,7 +27,7 @@ On Brave, Chrome, or Edge, userscripts also need a browser permission:
 3. Open Tampermonkey, then **Details**.
 4. Turn on **Allow User Scripts**.
 
-Then open [https://x.com/home](https://x.com/home) while logged in, on **For you**. The script runs on load, again whenever you come back to Home, and once an hour if you leave Home open.
+Then open [https://x.com/home](https://x.com/home) while logged in, on **For you**. The script checks once, closes the panel, and leaves it closed while you browse. It checks again an hour after the last success, or right away when the `topics` field changes. Opening a post, another profile, or Home again during that hour does not open the panel.
 
 Manual install: Tampermonkey dashboard, **Create a new script**, replace the template with [`x-snooze-topics.user.js`](x-snooze-topics.user.js), then save.
 

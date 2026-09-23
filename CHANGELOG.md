@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.1
+
+- Closing the panel uses the page's own click events, so the menu actually dismisses after a check.
+
+## 1.4.0
+
+- The Snooze Topics panel closes after a check, by clicking outside it.
+- Moving around X no longer opens the panel again.
+- A successful check is remembered for an hour, including across reloads. Changing the `topics` field still runs immediately.
+
 ## 1.3.0
 
 - Snoozed topics come from a comma-separated `topics` value in the script's Tampermonkey Storage tab.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Snooze Topics Keeper
 // @namespace    x-snooze-topics
-// @version      1.3.0
+// @version      1.4.1
 // @description  Turn selected X Premium "Snooze Topics" switches ON by clicking the panel. No API.
 // @homepageURL  https://github.com/07dcolem/x-snooze-topics-keeper
 // @supportURL   https://github.com/07dcolem/x-snooze-topics-keeper/issues
@@ -24,6 +24,7 @@
   // First-run value of the Tampermonkey Storage field named "topics".
   // After that, the Storage tab and the "Set snooze topics" menu own the list.
   const TOPICS_KEY = "topics";
+  const LAST_OK_KEY = "lastOk";
   const DEFAULT_TOPICS_TEXT = "Sports";
 
   // While /home stays open, click again after this long. Snoozes expire server-side in 24h.
@@ -35,12 +36,10 @@
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   let running = false;
-  let due = true;
-  let seenHref = location.href;
-  let nextReapplyAt = 0;
+  let applying = false;
+  let force = false;
   let quietUntil = 0;
   let timer = 0;
-  let misses = 0;
 
   function norm(value) {
     return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -99,6 +98,33 @@
 
   function clickOnce(el) {
     el.click();
+  }
+
+  function pointerClick(el) {
+    const rect = el.getBoundingClientRect();
+    const extra = {
+      bubbles: true,
+      cancelable: true,
+      clientX: rect.x + Math.max(rect.width, 1) / 2,
+      clientY: rect.y + Math.max(rect.height, 1) / 2,
+      button: 0,
+    };
+    const view = unsafeWindow;
+    try {
+      el.dispatchEvent(new view.PointerEvent("pointerdown", extra));
+      el.dispatchEvent(new view.MouseEvent("mousedown", extra));
+      el.dispatchEvent(new view.PointerEvent("pointerup", extra));
+      el.dispatchEvent(new view.MouseEvent("mouseup", extra));
+      el.dispatchEvent(new view.MouseEvent("click", extra));
+    } catch (err) {
+      console.warn(LOG, "outside click failed", err);
+      el.click();
+    }
+  }
+
+  function panelVisible() {
+    const heading = findHeading();
+    return !!(heading && visible(heading));
   }
 
   function findHeading() {
@@ -302,13 +328,36 @@
       : { panel: null, opened: true, reason: "panel-timeout" };
   }
 
+  function outsideClickPoint(tab) {
+    const list = tab.closest('[role="tablist"]');
+    const rect = (list || tab).getBoundingClientRect();
+    const spots = [
+      [rect.right - 8, rect.top + rect.height / 2],
+      [tab.getBoundingClientRect().right + 220, tab.getBoundingClientRect().top + tab.getBoundingClientRect().height / 2],
+      [Math.max(12, tab.getBoundingClientRect().left - 28), tab.getBoundingClientRect().top + 8],
+    ];
+    for (const [x, y] of spots) {
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) continue;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || hit === tab || tab.contains(hit)) continue;
+      if (hit.closest("a, button, [role='tab']")) continue;
+      const panel = findPanel();
+      if (panel && panel.contains(hit)) continue;
+      const label = norm(textOf(hit));
+      if (label === "for you" || label === "following" || label.includes("snooze")) continue;
+      return hit;
+    }
+    return null;
+  }
+
   async function closePanel() {
-    if (!findPanel() || findConfirm()) return;
     const tab = findForYouTab();
-    if (tab && tab.getAttribute("aria-selected") === "true") {
-      clickOnce(openTarget(tab));
+    for (let attempt = 0; attempt < 3 && panelVisible(); attempt += 1) {
+      const hit = tab && outsideClickPoint(tab);
+      if (hit) pointerClick(hit);
       await sleep(300);
     }
+    if (panelVisible()) console.warn(LOG, "panel still open after close");
   }
 
   async function confirmSnooze() {
@@ -353,7 +402,7 @@
   }
 
   async function apply() {
-    if (running) return null;
+    if (applying) return null;
     const wanted = preferredTopics();
     if (!wanted.length) {
       console.log(LOG, "topics field is empty");
@@ -362,7 +411,7 @@
     if (typing() || blockingDialog()) {
       return { retry: true, reason: "busy" };
     }
-    running = true;
+    applying = true;
     let opened = false;
     try {
       const openedState = await openPanel();
@@ -395,41 +444,43 @@
       return { retry: false, results };
     } finally {
       if (opened) await closePanel();
+      applying = false;
+    }
+  }
+
+  function shouldRun() {
+    if (force) return true;
+    const saved = GM_getValue(LAST_OK_KEY, null);
+    if (!saved || saved.topics !== topicsText()) return true;
+    return Date.now() - Number(saved.at) >= REAPPLY_EVERY_MS;
+  }
+
+  async function autoApply() {
+    if (running || !isHome() || document.hidden) return;
+    if (!shouldRun()) return;
+    if (Date.now() < quietUntil && !force) return;
+    running = true;
+    try {
+      const outcome = await apply();
+      if (!outcome) return;
+      if (outcome.retry) {
+        quietUntil = Date.now() + (outcome.reason === "for-you-not-selected" || outcome.reason === "no-for-you-tab" ? 15000 : 60000);
+        console.warn(LOG, "will retry later", outcome.reason || outcome.results || "");
+        return;
+      }
+      force = false;
+      quietUntil = 0;
+      GM_setValue(LAST_OK_KEY, { at: Date.now(), topics: topicsText() });
+      console.log(LOG, "preferred topics are on", outcome.results);
+    } finally {
       running = false;
     }
   }
 
-  async function autoApply() {
-    if (!due || running || !isHome() || document.hidden) return;
-    if (Date.now() < quietUntil || Date.now() < nextReapplyAt) return;
-    const outcome = await apply();
-    if (!outcome) return;
-    if (outcome.retry) {
-      const wait = outcome.reason === "for-you-not-selected" || outcome.reason === "no-for-you-tab" ? 5000 : 3000;
-      misses += 1;
-      quietUntil = Date.now() + (misses >= 6 ? 5 * 60 * 1000 : wait);
-      if (misses >= 6) {
-        misses = 0;
-        console.warn(LOG, "pausing for 5 minutes", outcome.reason || outcome.results || "");
-      }
-      return;
-    }
-    misses = 0;
-    due = false;
-    nextReapplyAt = Date.now() + REAPPLY_EVERY_MS;
-    console.log(LOG, "preferred topics are on", outcome.results);
-  }
-
   function schedule() {
-    if (location.href !== seenHref) {
-      seenHref = location.href;
-      due = true;
-      nextReapplyAt = 0;
-      quietUntil = 0;
-      misses = 0;
-    }
-    if (!due || !isHome()) return;
-    if (Date.now() < nextReapplyAt || Date.now() < quietUntil) return;
+    if (running || !isHome() || document.hidden) return;
+    if (Date.now() < quietUntil && !force) return;
+    if (!shouldRun()) return;
     if (timer) return;
     timer = window.setTimeout(() => {
       timer = 0;
@@ -463,18 +514,14 @@
   if (document.body) armObserver();
   else document.addEventListener("DOMContentLoaded", armObserver, { once: true });
 
-  window.setInterval(() => {
-    if (Date.now() >= nextReapplyAt) due = true;
-    schedule();
-  }, 60 * 1000);
+  window.setInterval(schedule, 60 * 1000);
 
   topicsText();
 
-  GM_addValueChangeListener(TOPICS_KEY, () => {
-    due = true;
-    nextReapplyAt = 0;
+  GM_addValueChangeListener(TOPICS_KEY, (_name, oldValue, newValue) => {
+    if (String(oldValue) === String(newValue)) return;
+    force = true;
     quietUntil = 0;
-    misses = 0;
     schedule();
   });
 
