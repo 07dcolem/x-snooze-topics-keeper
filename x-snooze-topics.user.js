@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Snooze Topics Keeper
 // @namespace    x-snooze-topics
-// @version      1.2.0
+// @version      1.3.0
 // @description  Turn selected X Premium "Snooze Topics" switches ON by clicking the panel. No API.
 // @homepageURL  https://github.com/07dcolem/x-snooze-topics-keeper
 // @supportURL   https://github.com/07dcolem/x-snooze-topics-keeper/issues
@@ -10,19 +10,21 @@
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @run-at       document-start
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_addValueChangeListener
+// @grant        GM_registerMenuCommand
+// @grant        unsafeWindow
 // @noframes
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  // Full row label, case-insensitive. Only these are turned ON.
-  // Every other topic in the panel is left alone.
-  // Public labels include: Politics, Videos, Sports, Business & Finance,
-  // Science & Technology, Entertainment & Arts, Artificial Intelligence,
-  // Gaming, Crypto, Iran Conflict. scan() prints the live list.
-  const PREFERRED_TOPICS = ["Sports"];
+  // First-run value of the Tampermonkey Storage field named "topics".
+  // After that, the Storage tab and the "Set snooze topics" menu own the list.
+  const TOPICS_KEY = "topics";
+  const DEFAULT_TOPICS_TEXT = "Sports";
 
   // While /home stays open, click again after this long. Snoozes expire server-side in 24h.
   const REAPPLY_EVERY_MS = 60 * 60 * 1000;
@@ -173,15 +175,32 @@
   }
 
   function pageApi() {
-    const target = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+    const target = unsafeWindow;
     if (!target.XSnoozeTopics) target.XSnoozeTopics = {};
     return target.XSnoozeTopics;
+  }
+
+  function topicsText() {
+    const stored = GM_getValue(TOPICS_KEY, null);
+    if (stored === null || stored === undefined) {
+      GM_setValue(TOPICS_KEY, DEFAULT_TOPICS_TEXT);
+      return DEFAULT_TOPICS_TEXT;
+    }
+    if (Array.isArray(stored)) return stored.join(", ");
+    return String(stored);
+  }
+
+  function preferredTopics() {
+    return topicsText()
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
   }
 
   function storeLabels(labels) {
     const payload = { at: new Date().toISOString(), labels };
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      unsafeWindow.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     } catch (err) {
       console.warn(LOG, "could not store labels", err);
     }
@@ -335,6 +354,11 @@
 
   async function apply() {
     if (running) return null;
+    const wanted = preferredTopics();
+    if (!wanted.length) {
+      console.log(LOG, "topics field is empty");
+      return { retry: false, results: [] };
+    }
     if (typing() || blockingDialog()) {
       return { retry: true, reason: "busy" };
     }
@@ -354,7 +378,7 @@
       console.table(before.map((entry) => ({ topic: entry.label, on: entry.on })));
 
       const results = [];
-      for (const topic of PREFERRED_TOPICS) {
+      for (const topic of wanted) {
         const result = await ensureOn(topic);
         results.push({ topic, result });
         console.log(LOG, topic, result);
@@ -413,16 +437,17 @@
     }, 800);
   }
 
+  const pageWindow = unsafeWindow;
   for (const name of ["pushState", "replaceState"]) {
-    const original = history[name];
-    history[name] = function () {
+    const original = pageWindow.history[name];
+    pageWindow.history[name] = function () {
       const result = original.apply(this, arguments);
       schedule();
       return result;
     };
   }
-  window.addEventListener("popstate", schedule);
-  window.addEventListener("hashchange", schedule);
+  pageWindow.addEventListener("popstate", schedule);
+  pageWindow.addEventListener("hashchange", schedule);
 
   const armObserver = () => {
     if (!document.body) return;
@@ -443,9 +468,33 @@
     schedule();
   }, 60 * 1000);
 
+  topicsText();
+
+  GM_addValueChangeListener(TOPICS_KEY, () => {
+    due = true;
+    nextReapplyAt = 0;
+    quietUntil = 0;
+    misses = 0;
+    schedule();
+  });
+
+  GM_registerMenuCommand("Set snooze topics", () => {
+    const next = pageWindow.prompt(
+      "Comma-separated topics to snooze. Use the full labels from the Snooze Topics panel.",
+      topicsText()
+    );
+    if (next === null) return;
+    GM_setValue(TOPICS_KEY, next);
+  });
+
   const api = pageApi();
   api.scan = scan;
   api.apply = apply;
   api.labels = [];
-  api.preferred = PREFERRED_TOPICS.slice();
+  Object.defineProperty(api, "preferred", {
+    configurable: true,
+    get() {
+      return preferredTopics();
+    },
+  });
 })();

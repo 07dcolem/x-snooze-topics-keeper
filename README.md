@@ -4,7 +4,7 @@ Tampermonkey userscript for [X Premium](https://x.com) on the web. It keeps the 
 
 X forgets a snooze after about 24 hours. The script opens the same panel you do, turns your switches on, and clicks **Snooze N topics**. It talks to X only by clicking the page.
 
-The published default is Sports. Change `PREFERRED_TOPICS` to snooze any other labels the panel is showing.
+The first-run list is Sports. After that, the comma-separated `topics` field in Tampermonkey's Storage tab is the list that runs.
 
 ## What you need
 
@@ -39,7 +39,7 @@ The script:
 
 1. Opens the panel from **For you**.
 2. Reads every label currently in the panel.
-3. Turns on each name listed in `PREFERRED_TOPICS` whose switch is off.
+3. Turns on each name in the `topics` field whose switch is off.
 4. Clicks **Snooze N topics** once, after those switches are on.
 5. Leaves a switch alone when it is already on.
 6. Closes the panel when it was the script that opened it.
@@ -52,11 +52,11 @@ A snooze that is already saved keeps running if you take its name out of the lis
 
 The script does not keep its own copy of X's catalog. Every run reads the labels that are on screen.
 
-- A new topic X adds is printed in the console and saved in the browser. It is left off until you add that exact label to `PREFERRED_TOPICS`.
-- A topic X renames has to be updated in `PREFERRED_TOPICS`. The old spelling is reported as `missing`.
+- A new topic X adds is printed in the console and saved in the browser. It stays off until that exact label is in the `topics` field.
+- A topic X renames has to be updated in the `topics` field. The old spelling is reported as `missing`.
 - A topic X removes is also reported as `missing`.
 
-If any name in `PREFERRED_TOPICS` is missing, the script does not click **Snooze N topics** on that pass. A typo or a retired name blocks the topics that are still there, so the panel is not saved half-updated. The script retries, then waits 5 minutes. Fix the spelling and reload Home.
+If any name in the field is missing, the script does not click **Snooze N topics** on that pass. A typo or a retired name blocks the topics that are still there, so the panel is not saved half-updated. The script retries, then waits 5 minutes. Fix the spelling and reload Home.
 
 See the list X is offering right now:
 
@@ -84,33 +84,53 @@ Labels seen on a Premium account in September 2026:
 - Gaming
 - Crypto
 
-Iran Conflict has appeared in the public panel at other times. Use `scan()` for the list on your account today. Copy those strings into the config.
+Iran Conflict has appeared in the public panel at other times. Use `scan()` for the list on your account today. Copy those strings into the `topics` field.
 
-## Change the topic
+## Choose topics
 
-Edit the installed script. The Tampermonkey dashboard is the copy that runs. The file in this repository is the source.
-
-1. Open the Tampermonkey dashboard.
-2. Click **X Snooze Topics Keeper**.
-3. Change the array near the top.
-4. Save (**Ctrl+S**).
-5. Reload [https://x.com/home](https://x.com/home) with **For you** selected.
+The list lives in Tampermonkey, not in the script source. Names are separated by commas. Matching ignores case and extra spaces. `sports` matches `Sports`. `Sport` does not match `Sports`.
 
 One topic:
 
-```javascript
-const PREFERRED_TOPICS = ["Politics"];
+```text
+Politics
 ```
 
 Several topics. One visit turns them all on, then one click on **Snooze N topics** saves the set:
 
-```javascript
-const PREFERRED_TOPICS = ["Sports", "Politics", "Crypto"];
+```text
+Sports, Politics, Crypto
 ```
 
-Use the full label from the panel or from `scan()`. Matching ignores case and extra spaces. `sports` matches `Sports`. `Sport` does not match `Sports`.
+An empty value snoozes nothing. Taking a name out stops the script from snoozing it again. A snooze that is already saved keeps running until the 24 hours run out, or until you press **Reset**.
 
-`REAPPLY_EVERY_MS` is how long to wait before trying again while Home stays open. The default is one hour. Coming back to Home runs it again immediately.
+### From the Tampermonkey menu
+
+1. Open [https://x.com/home](https://x.com/home).
+2. Click the Tampermonkey icon.
+3. Under **X Snooze Topics Keeper**, choose **Set snooze topics**.
+4. Edit the comma-separated list and press **OK**.
+
+The script saves that text and applies it on Home.
+
+### From the script's Storage tab
+
+1. Open the Tampermonkey dashboard.
+2. Click **X Snooze Topics Keeper**.
+3. Open the **Storage** tab (the database icon). The field appears after the script has run once on x.com.
+4. Edit the `topics` value. Tampermonkey stores it as JSON, so keep the quotation marks:
+
+```text
+"Sports, Politics, Crypto"
+```
+
+5. Save the storage page.
+
+An open Home tab picks up the new value. Otherwise reload [https://x.com/home](https://x.com/home) with **For you** selected.
+
+The script source still contains `DEFAULT_TOPICS_TEXT`, which is only written the first time `topics` is empty and missing. Later edits belong in Storage or the menu.
+
+`REAPPLY_EVERY_MS` in the source is how long to wait before trying again while Home stays open. The default is one hour. Coming back to Home runs it again immediately.
 
 ## Console helpers
 
@@ -121,13 +141,13 @@ On x.com or twitter.com:
 | `XSnoozeTopics.scan()` | Print and store the open panel's labels. No clicks. |
 | `XSnoozeTopics.apply()` | Open the panel if needed, turn the preferred switches on, click **Snooze N topics** when something changed. |
 | `XSnoozeTopics.labels` | Labels from the last scan. |
-| `XSnoozeTopics.preferred` | The configured names. |
+| `XSnoozeTopics.preferred` | The names currently in the `topics` field. |
 
 ## If a topic stays off
 
 Open the panel and run `XSnoozeTopics.scan()`.
 
-- The name is missing from the table. Put the spelling from the table into `PREFERRED_TOPICS`.
+- The name is missing from the table. Put the spelling from the table into the `topics` field.
 - The table is empty. The panel is not using a switch or checkbox next to the label. The script looks for the visible words **For you** and **Snooze Topics**, then the nearest `role="switch"`, `role="checkbox"`, or checkbox input. Hashed `css-` class names are ignored because X changes them.
 - The console says `missing` for one of several names. Correct that name. The confirm button is skipped until every configured name is found.
 - **Allow User Scripts** is off. Chromium will install the script and then refuse to run it. The Tampermonkey dashboard shows a banner when that permission is missing.
@@ -140,4 +160,4 @@ Open the panel and run `XSnoozeTopics.scan()`.
 - A text field or another dialog on screen delays the run.
 - The hourly repeat and the 5-minute pause after repeated failures are there so the panel is not opened in a loop.
 
-Licensed under MIT. See [LICENSE](LICENSE).
+Licensed under MIT. See [LICENSE](LICENSE). Version history is in [CHANGELOG.md](CHANGELOG.md).
